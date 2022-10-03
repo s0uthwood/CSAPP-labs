@@ -72,7 +72,7 @@ Phase 1 defused. How about the next one?
 
 `read_six_numbers()` read from input string `char *s` with format `%d %d %d %d %d %d`, and saved numbers in an array on stack.
 
-The first `cmp` compare the first number with const int `1`. After that, the program fall into an loop, which compare `array[cur]` with `array[cur - 1] * 2`.
+The first `cmp` compare the first number with const int `1`. After that, the program fall into a loop, which compare `array[cur]` with `array[cur - 1] * 2`.
 
 Therefore, our input should be:
 
