@@ -1,0 +1,40 @@
+0x000:                      |     .pos 0
+0x000:                      | init:
+0x000: 30f40002000000000000 |     irmovq Stack, %rsp
+0x00a: 801400000000000000   |     call Main
+0x013: 00                   |     halt
+                            | 
+0x014:                      | Main:
+0x014: 30f76800000000000000 |     irmovq ele1, %rdi
+0x01e: 6300                 |     xorq %rax, %rax
+0x020: 802a00000000000000   |     call rsum_list
+0x029: 90                   |     ret
+                            | 
+0x02a:                      | rsum_list:
+0x02a:                      |   loop:
+0x02a: 6277                 |     andq %rdi, %rdi
+0x02c: 736100000000000000   |     je end
+0x035: 50370000000000000000 |     mrmovq 0(%rdi), %rbx
+0x03f: a03f                 |     pushq %rbx
+0x041: 50770800000000000000 |     mrmovq 8(%rdi), %rdi
+0x04b: 802a00000000000000   |     call rsum_list
+0x054: b03f                 |     popq %rbx
+0x056: 6030                 |     addq %rbx, %rax
+0x058: 702a00000000000000   |     jmp loop
+0x061:                      |   end:
+0x061: 90                   |     ret
+                            | 
+                            | # Sample linked list
+0x068:                      | .align 8
+0x068:                      | ele1:
+0x068: 0a00000000000000     | .quad 0x00a
+0x070: 7800000000000000     | .quad ele2
+0x078:                      | ele2:
+0x078: b000000000000000     | .quad 0x0b0
+0x080: 8800000000000000     | .quad ele3
+0x088:                      | ele3:
+0x088: 000c000000000000     | .quad 0xc00
+0x090: 0000000000000000     | .quad 0
+                            | 
+0x200:                      |     .pos 0x200
+0x200:                      | Stack:
