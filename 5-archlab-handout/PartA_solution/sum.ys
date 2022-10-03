@@ -1,0 +1,38 @@
+    .pos 0
+init:
+    irmovq Stack, %rsp
+    call Main
+    halt
+
+Main:
+    irmovq ele1, %rdi
+    call Sum
+    ret
+
+Sum:
+    xorq %rax, %rax
+    rrmovq %rdi, %rcx
+  loop:
+    andq %rcx, %rcx
+    je end
+    mrmovq 0(%rcx), %rbx
+    addq %rbx, %rax
+    mrmovq 8(%rcx), %rcx
+    jmp loop
+  end:
+    ret
+
+# Sample linked list
+.align 8
+ele1:
+.quad 0x00a
+.quad ele2
+ele2:
+.quad 0x0b0
+.quad ele3
+ele3:
+.quad 0xc00
+.quad 0
+
+    .pos 0x200
+Stack:

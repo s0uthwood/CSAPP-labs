@@ -1,0 +1,44 @@
+    .pos 0
+init:
+    irmovq Stack, %rsp
+    call Main
+    halt
+
+Main:
+    irmovq src, %rdi
+    irmovq dest, %rsi
+    irmovq $3, %rdx
+    call copy
+    ret
+
+copy:
+    irmovq $1, %r8
+    irmovq $8, %r9
+    xorq %rax, %rax
+    rrmovq %rdx, %rcx
+  loop:
+    mrmovq 0(%rdi), %rbx
+    rmmovq %rbx, 0(%rsi)
+    xorq %rbx, %rax
+    addq %r9, %rdi
+    addq %r9, %rsi
+    subq %r8, %rcx
+    andq %rcx, %rcx
+    jne loop
+    ret
+
+# Sample linked list
+.align 8
+# Source block
+src:
+.quad 0x00a
+.quad 0x0b0
+.quad 0xc00
+# Destination block
+dest:
+.quad 0x111
+.quad 0x222
+.quad 0x333
+
+    .pos 0x200
+Stack:
