@@ -79,9 +79,14 @@ team_t team = {
 #define FIRST_FIT 1
 #define NEXT_FIT 2
 #define BEST_FIT 3
-#define FIT_ALGO FIRST_FIT
+
+#define FIT_ALGO 2
 
 static char *heap_listp;
+
+#if FIT_ALGO == NEXT_FIT
+char *cur_listp;
+#endif
 
 static void place(void *bp, size_t size){
     size_t origin_size = GET_SIZE(HDRP(bp));
@@ -98,8 +103,13 @@ static void place(void *bp, size_t size){
     return;
 }
 
+/* 
+ * util: 74%
+ * secs: 0.4585
+ * Perf index = 44 (util) + 16 (thru) = 61 / 100
+ */
 #if FIT_ALGO == FIRST_FIT
-static void *find_fit(size_t size){
+static void *find_fit(size_t size) {
     void *tmp_listp = heap_listp;
     while (GET_SIZE(HDRP(tmp_listp)) < size || GET_ALLOC(HDRP(tmp_listp))) {
         if (GET_SIZE(HDRP(tmp_listp)) == 0) {
@@ -109,9 +119,51 @@ static void *find_fit(size_t size){
     }
     return tmp_listp;
 }
+/* 
+ * util: 73%
+ * secs: 0.0918
+ * Perf index = 44 (util) + 40 (thru) = 84/100
+ */
 # elif FIT_ALGO == NEXT_FIT
-
+static void *find_fit(size_t size) {
+    void *tmp_listp;
+    for (tmp_listp = cur_listp; GET_SIZE(HDRP(tmp_listp)) != 0; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        if (!GET_ALLOC(HDRP(tmp_listp)) && GET_SIZE(HDRP(tmp_listp)) >= size) {
+            cur_listp = tmp_listp;
+            return tmp_listp;
+        }
+    }
+    for (tmp_listp = heap_listp; tmp_listp != cur_listp; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        if (!GET_ALLOC(HDRP(tmp_listp)) && GET_SIZE(HDRP(tmp_listp)) >= size) {
+            cur_listp = tmp_listp;
+            return tmp_listp;
+        }
+    }
+    return NULL;
+}
+/*
+ * util: 75%
+ * secs: 0.4660
+ * Perf index = 45 (util) + 16 (thru) = 61/100
+ */
 # elif FIT_ALGO == BEST_FIT
+static void *find_fit(size_t size) {
+    void *best_listp = NULL;
+    size_t best_size = 0x7fffffff;
+    for (void *tmp_listp = heap_listp; GET_SIZE(HDRP(tmp_listp)) != 0; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        size_t cur_size = GET_SIZE(HDRP(tmp_listp));
+        if (!GET_ALLOC(HDRP(tmp_listp)) && cur_size >= size) {
+            if (cur_size == size) {
+                return tmp_listp;
+            }
+            if (cur_size < best_size) {
+                best_size = cur_size;
+                best_listp = tmp_listp;
+            }
+        }
+    }
+    return best_listp;
+}
 
 # endif
 
@@ -153,6 +205,11 @@ static void *coalesce(void *bp) {
     //     bp = PREV_BLKP(bp);
     // PUT(HDRP(bp), PACK(size, 0));
 
+#if FIT_ALGO == NEXT_FIT
+    if (cur_listp > bp && cur_listp < NEXT_BLKP(bp))
+        cur_listp = bp;
+#endif
+
     return bp;
 }
 
@@ -189,6 +246,10 @@ int mm_init(void)
     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));              /* Epilogue header */
     heap_listp += (2 * WSIZE);
+    
+#if FIT_ALGO == NEXT_FIT
+    cur_listp = heap_listp;
+#endif
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
