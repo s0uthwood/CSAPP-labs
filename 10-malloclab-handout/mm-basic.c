@@ -41,7 +41,6 @@ team_t team = {
 /* Basic constants and macros */
 #define WSIZE 4                 /* Word and header/footer size (bytes) */
 #define DSIZE 8                 /* Double word size (bytes) */
-#define MIN_BLOCK_SIZE 16
 #define CHUNKSIZE (1 << 12)     /* Extend hea by this amount (bytes) */
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -55,23 +54,6 @@ team_t team = {
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
 
-/*
- * Block struct:
- * +-+-+-+-+-+-+-+-+-+-+
- * | Block Size  | 00A | A: Alloc
- * +-+-+-+-+-+-+-+-+-+-+
- * |       pred        |
- * +-+-+-+-+-+-+-+-+-+-+
- * |       succ        |
- * +-+-+-+-+-+-+-+-+-+-+
- * |      Payload      |
- * +-+-+-+-+-+-+-+-+-+-+
- * |      Padding      |
- * +-+-+-+-+-+-+-+-+-+-+
- * | Block Size  | 00A | A: Alloc
- * +-+-+-+-+-+-+-+-+-+-+
- */
-
 /* Read and write a word at address p */
 #define GET(p) (*(unsigned int*)(p))
 #define PUT(p, val) (*(unsigned int*)(p) = (val))
@@ -84,76 +66,36 @@ team_t team = {
 #define FTRP(bp) ((char*)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 
-/* Given block ptr bp, compute address of next and previous blocks */
+/* Given block ptr bp, compte address of next and previous blocks */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char*)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char*)(bp) - DSIZE)))
 
-/* Given block ptr bp, compute pred and succ block */
-#define FD(bp) (*(char**)(bp))
-#define BK(bp) (*(char**)((bp) + WSIZE))
+/*
+ * find_fit algorithm:
+ * 1. first fit
+ * 2. next fit
+ * 3. best fit
+ */
+#define FIRST_FIT 1
+#define NEXT_FIT 2
+#define BEST_FIT 3
 
-/* Given block ptr bp, compute pred and succ ptr address*/
-#define FD_PTR(bp) ((char*)(bp))
-#define BK_PTR(bp) ((char*)(bp + WSIZE))
-
-#define SET_FD(bp, val) (*(unsigned int*)(bp) = (unsigned int)(val))
-#define SET_BK(bp, val) (*(unsigned int*)(bp+WSIZE) = (unsigned int)(val))
+#define FIT_ALGO 2
 
 static char *heap_listp;
 
-#define FREE_LIST_SIZE 10
-void *free_lists[FREE_LIST_SIZE] = {NULL};
+#if FIT_ALGO == NEXT_FIT
+char *cur_listp;
+#endif
 
-
-/* Following funcions was method of free_lists */
-size_t size_to_type(size_t size) {
-    size_t x = 0;
-    if   (size < 16)        ;
-    else if (size <= 32)    x = 0;
-    else if (size <= 64)    x = 1;
-    else if (size <= 128)   x = 2;
-    else if (size <= 256)   x = 3;
-    else if (size <= 512)   x = 4;
-    else if (size <= 1024)  x = 5;
-    else if (size <= 2048)  x = 6;
-    else if (size <= 4096)  x = 7;
-    else                    x = 8;
-    return x;
-}
-
-static void insert_node_to_free_list(void *bp, size_t size){
-    size_t list_num = size_to_type(size);
-    size_t last_head = (size_t)free_lists[list_num];
-    SET_BK(bp, last_head);
-    if (last_head != NULL) {
-        SET_FD(last_head, bp);
-    }
-    SET_FD(bp, 0);
-    free_lists[list_num] = bp;
-    return;
-}
-
-static void delete_node_from_free_list(void *bp, size_t size) {
-    if (FD(bp) != NULL)
-        SET_BK(FD(bp), BK(bp));
-    else
-        free_lists[size_to_type(size)] = BK(bp);
-    if (BK(bp) != NULL)
-        SET_FD(BK(bp), FD(bp));
-    return;
-}
-
-/* place the block to a free block */
 static void place(void *bp, size_t size){
     size_t origin_size = GET_SIZE(HDRP(bp));
-    delete_node_from_free_list(bp, origin_size);
     if (origin_size - size >= 2 * DSIZE) {
         PUT(HDRP(bp), PACK(size, 1));
         PUT(FTRP(bp), PACK(size, 1));
-        size_t remain_size = origin_size - size;
-        PUT(HDRP(NEXT_BLKP(bp)), PACK(remain_size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(remain_size, 0));
-        insert_node_to_free_list(NEXT_BLKP(bp), remain_size);
+
+        PUT(HDRP(NEXT_BLKP(bp)), PACK(origin_size - size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(origin_size - size, 0));
     } else {
         PUT(HDRP(bp), PACK(origin_size, 1));
         PUT(FTRP(bp), PACK(origin_size, 1));
@@ -161,16 +103,69 @@ static void place(void *bp, size_t size){
     return;
 }
 
-/* find a fit free block (first fit) */
+/* 
+ * util: 74%
+ * secs: 0.4585
+ * Perf index = 44 (util) + 16 (thru) = 61 / 100
+ */
+#if FIT_ALGO == FIRST_FIT
 static void *find_fit(size_t size) {
-    size_t list_num = size_to_type(size);
-    for (int i = list_num; i < FREE_LIST_SIZE; ++i)
-        if (free_lists[i] != NULL)
-            for (void* tmp_ptr = free_lists[i]; tmp_ptr != NULL; tmp_ptr = BK(tmp_ptr))
-                if (GET_SIZE(HDRP(tmp_ptr)) >= size)
-                    return tmp_ptr;
+    void *tmp_listp = heap_listp;
+    while (GET_SIZE(HDRP(tmp_listp)) < size || GET_ALLOC(HDRP(tmp_listp))) {
+        if (GET_SIZE(HDRP(tmp_listp)) == 0) {
+            return NULL;
+        }
+        tmp_listp = NEXT_BLKP(tmp_listp);
+    }
+    return tmp_listp;
+}
+/* 
+ * util: 73%
+ * secs: 0.0918
+ * Perf index = 44 (util) + 40 (thru) = 84/100
+ */
+# elif FIT_ALGO == NEXT_FIT
+static void *find_fit(size_t size) {
+    void *tmp_listp;
+    for (tmp_listp = cur_listp; GET_SIZE(HDRP(tmp_listp)) != 0; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        if (!GET_ALLOC(HDRP(tmp_listp)) && GET_SIZE(HDRP(tmp_listp)) >= size) {
+            cur_listp = tmp_listp;
+            return tmp_listp;
+        }
+    }
+    for (tmp_listp = heap_listp; tmp_listp != cur_listp; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        if (!GET_ALLOC(HDRP(tmp_listp)) && GET_SIZE(HDRP(tmp_listp)) >= size) {
+            cur_listp = tmp_listp;
+            return tmp_listp;
+        }
+    }
     return NULL;
 }
+/*
+ * util: 75%
+ * secs: 0.4660
+ * Perf index = 45 (util) + 16 (thru) = 61/100
+ */
+# elif FIT_ALGO == BEST_FIT
+static void *find_fit(size_t size) {
+    void *best_listp = NULL;
+    size_t best_size = 0x7fffffff;
+    for (void *tmp_listp = heap_listp; GET_SIZE(HDRP(tmp_listp)) != 0; tmp_listp = NEXT_BLKP(tmp_listp)) {
+        size_t cur_size = GET_SIZE(HDRP(tmp_listp));
+        if (!GET_ALLOC(HDRP(tmp_listp)) && cur_size >= size) {
+            if (cur_size == size) {
+                return tmp_listp;
+            }
+            if (cur_size < best_size) {
+                best_size = cur_size;
+                best_listp = tmp_listp;
+            }
+        }
+    }
+    return best_listp;
+}
+
+# endif
 
 /*
  * coalesce - Coalesce free block next by
@@ -178,46 +173,43 @@ static void *find_fit(size_t size) {
 static void *coalesce(void *bp) {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_SIZE(HDRP(bp));
 
+    size_t size = GET_SIZE(HDRP(bp));
     if (prev_alloc && next_alloc)
         return bp;
-
-    /* coalesce with next block */
     if (!next_alloc && prev_alloc) {
-        size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        delete_node_from_free_list(bp, size);
-        delete_node_from_free_list(NEXT_BLKP(bp), next_size);
-        size += next_size;
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         PUT(HDRP(bp), PACK(size, 0));
     }
-
-    /* coalesce with prev block */
     if (!prev_alloc && next_alloc) {
-        size_t prev_size = GET_SIZE(FTRP(PREV_BLKP(bp)));
-        delete_node_from_free_list(bp, size);
-        delete_node_from_free_list(PREV_BLKP(bp), prev_size);
-        size += prev_size;
+        size += GET_SIZE(FTRP(PREV_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }
-
-    /* coalesce with prev and next block */
     if (!prev_alloc && !next_alloc) {
-        size_t prev_size = GET_SIZE(FTRP(PREV_BLKP(bp)));
-        size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        delete_node_from_free_list(bp, size);
-        delete_node_from_free_list(PREV_BLKP(bp), prev_size);
-        delete_node_from_free_list(NEXT_BLKP(bp), next_size);
-        size += prev_size + next_size;
+        size += GET_SIZE(FTRP(PREV_BLKP(bp)));
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     };
+    
+    // size_t size = GET_SIZE(HDRP(bp)) + (1 - prev_alloc) * GET_SIZE(FTRP(PREV_BLKP(bp))) + (1 - next_alloc) * GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    // void *end_bp = bp;
+    // if (!next_alloc)
+    //     end_bp = NEXT_BLKP(end_bp);
+    // PUT(FTRP(end_bp), PACK(size, 0));
+    // if (!prev_alloc)
+    //     bp = PREV_BLKP(bp);
+    // PUT(HDRP(bp), PACK(size, 0));
 
-    insert_node_to_free_list(bp, size);
+#if FIT_ALGO == NEXT_FIT
+    if (cur_listp > bp && cur_listp < NEXT_BLKP(bp))
+        cur_listp = bp;
+#endif
+
     return bp;
 }
 
@@ -235,7 +227,6 @@ static void *extend_heap(size_t words) {
     /* Initialize free block header/footer and the epilogue header */
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
-    insert_node_to_free_list(bp, size);
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
     /* Coalesce if the previous block was free */
@@ -250,14 +241,16 @@ int mm_init(void)
     /* Create the initial empty heap */
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)   /* sbrk() function returns the start address of the new area. */
         return -1;
-    for (int i = 0; i < FREE_LIST_SIZE; ++i)
-        free_lists[i] = NULL;
     PUT(heap_listp, 0);                                     /* Alignment */
     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));          /* Prologue block's size is 8 and is always alloced */
     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));              /* Epilogue header */
     heap_listp += (2 * WSIZE);
     
+#if FIT_ALGO == NEXT_FIT
+    cur_listp = heap_listp;
+#endif
+
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
         return -1;
     return 0;
@@ -297,54 +290,42 @@ void mm_free(void *ptr)
 
     PUT(HDRP(ptr), PACK(size, 0));
     PUT(FTRP(ptr), PACK(size, 0));
-    insert_node_to_free_list(ptr, size);
+
     coalesce(ptr);
 }
-
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
-void *mm_realloc(void *ptr, size_t size){
-    void *nblock = ptr;
-    int reamin;
-    if (size == 0) return NULL;
-    if (size <= DSIZE) size = 2 * DSIZE;
-    else size = ALIGN(size + 8);
-    if ((reamin = GET_SIZE(HDRP(ptr)) - size) >= 0){
-        return ptr;
-    }
-    else if (!GET_ALLOC(HDRP(NEXT_BLKP(ptr))) || !GET_SIZE(HDRP(NEXT_BLKP(ptr)))){
-        if ((reamin = GET_SIZE(HDRP(ptr)) + GET_SIZE(HDRP(NEXT_BLKP(ptr))) - size) < 0){
-            if (extend_heap(MAX(-reamin, CHUNKSIZE)/WSIZE) == NULL)
-                return NULL;
-            reamin += MAX(-reamin, CHUNKSIZE);
-        }
-        delete_node_from_free_list(NEXT_BLKP(ptr), GET_SIZE(HDRP(NEXT_BLKP(ptr))));
-        PUT(HDRP(ptr), PACK(size + reamin, 1));
-        PUT(FTRP(ptr), PACK(size + reamin, 1));
-    }
-    else{
-        nblock = mm_malloc(size);
-        memcpy(nblock, ptr, GET_SIZE(HDRP(ptr)));
-        mm_free(ptr);
-    }
-    return nblock;
+void *mm_realloc(void *ptr, size_t size)
+{
+    void *oldptr = ptr;
+    void *newptr;
+    size_t copySize;
+    
+    newptr = mm_malloc(size);
+    if (newptr == NULL)
+      return NULL;
+    size = GET_SIZE(HDRP(oldptr));
+    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    copySize = GET_SIZE(HDRP(newptr));
+    if (size < copySize)
+      copySize = size;
+    memcpy(newptr, oldptr, copySize - WSIZE);
+    mm_free(oldptr);
+    return newptr;
 }
 
-// Results for mm malloc:
-// trace  valid  util     ops      secs  Kops
-//  0       yes   98%    5694  0.000162 35235
-//  1       yes   94%    5848  0.000171 34199
-//  2       yes   98%    6648  0.000200 33273
-//  3       yes   99%    5380  0.000141 38102
-//  4       yes   66%   14400  0.000268 53771
-//  5       yes   89%    4800  0.000182 26446
-//  6       yes   86%    4800  0.000184 26130
-//  7       yes   55%   12000  0.000198 60759
-//  8       yes   51%   24000  0.000446 53848
-//  9       yes   99%   14401  0.000141101774
-// 10       yes   67%   14401  0.000127113215
-// Total          82%  112372  0.002218 50652
 
-// Perf index = 49 (util) + 40 (thru) = 89/100
+
+
+
+
+
+
+
+
+
+
+
+
