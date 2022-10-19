@@ -306,10 +306,7 @@ int floatFloat2Int(unsigned uf) {
   int e = ((uf >> 23) & 0xff) - 127, sign = uf >> 31 << 31, pow = 1;
   if (e > 31) return 0x80000000;
   if (e < 0) return 0;
-  while (e > 0){
-    pow *= 2;
-    e -= 1;
-  }
+  pow = 1 << e;
   if (sign) pow = ~pow + 1;
   return pow;
 }
